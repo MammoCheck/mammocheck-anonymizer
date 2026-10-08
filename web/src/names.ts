@@ -59,7 +59,7 @@ export function buildNameSet(names: string[]): NameSet {
 }
 
 /**
- * Fold spellings that differ only by romanization (Arabic names especially: Serbaji / Sarbagi / Sarbaji,
+ * Fold spellings that differ only by romanization (Arabic names especially: Kerbaji / Karbagi / Karbaji,
  * Abdel / Abdul, Youssef / Yousef): vowels e->a, o->u, y->i; j/dj->g, q/c->k, ph->f; double letters collapsed.
  */
 export function translit(s: string): string {

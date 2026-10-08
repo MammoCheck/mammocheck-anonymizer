@@ -126,10 +126,10 @@ describe("compound labels", () => {
 });
 
 describe("transliteration variants", () => {
-  const ns2 = buildNameSet(["Rana Serbaji", "AbdulAziz Rifai"]);
+  const ns2 = buildNameSet(["Nadia Kerbaji", "AbdulKarim Tamimi"]);
   const m = (t: string) => findNameHits(t, ns2).map((h) => t.slice(h.start, h.end));
   it("catches romanization variants", () => {
-    for (const w of ["Sarbagi", "SARBAGI", "Serbaji", "Sarbaji", "Abdulaziz"]) expect(m(w), w).toEqual([w]);
+    for (const w of ["Karbagi", "KARBAGI", "Kerbaji", "Karbaji", "Abdulkarim"]) expect(m(w), w).toEqual([w]);
   });
   it("still ignores clinical words", () => {
     for (const w of ["Endometriosis", "Tripoli", "radiculopathy", "Thermography", "abdominal", "Saturday", "Sarcoidosis", "Serotonin", "Barbiturate"]) expect(m(w), w).toEqual([]);
