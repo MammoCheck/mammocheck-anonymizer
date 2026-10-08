@@ -106,15 +106,27 @@ async function mapLimit<T>(items: T[], limit: number, fn: (x: T) => Promise<void
   );
 }
 
-export async function runAll(patients: RunPatient[], sink: Sink, onProgress: Progress, concurrency = 3): Promise<PatientReport[]> {
+/** One worker per spare core: each runs its own OCR engine (~150 MB), so cap it. */
+export const defaultConcurrency = () =>
+  Math.max(2, Math.min(6, ((typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4) - 1));
+
+/** Rough cost so the slowest files (scanned PDFs, photos needing OCR) start first and the run does not end on one long file. */
+function cost(f: File): number {
+  const k = classify(f.name);
+  if (k === "pdf") return 3e9 + f.size;
+  if (k === "image") return 2e9 + f.size; // FLIR images turn out cheap, but they cannot be told apart without reading them
+  return f.size;
+}
+
+export async function runAll(patients: RunPatient[], sink: Sink, onProgress: Progress, concurrency = defaultConcurrency()): Promise<PatientReport[]> {
   const pool = new Pool(concurrency);
   const total = patients.reduce((n, p) => n + p.files.length, 0);
   let done = 0;
-  const reports: PatientReport[] = [];
   try {
+    // 1. per patient: harvest extra name spellings from Name: fields, plan output paths, create Drive folders
+    const preps = [];
     for (const p of patients) {
       const baseNames = [p.name, ...splitExtra(p.extra)];
-      // 1. harvest extra name spellings from Name: fields
       const textFiles = p.files.filter((f) => ["docx", "pdf", "text"].includes(classify(f.file.name)));
       onProgress({ patient: p.id, file: "", state: "harvesting", done, total });
       const harvested = new Set<string>();
@@ -123,17 +135,10 @@ export async function runAll(patients: RunPatient[], sink: Sink, onProgress: Pro
       });
       const names = [...baseNames, ...harvested];
       const ns = buildNameSet(names);
-
-      // 2. plan output paths (names -> ID), creating the Drive folders up front, one after another
-      const used = new Set<string>();
-      const plan = p.files.map((f) => {
-        const dirs = f.relPath.split("/").slice(0, -1).map((d) => rewriteText(d, ns, p.id));
-        return { f, dirs };
-      });
+      const plan = p.files.map((f) => ({ f, dirs: f.relPath.split("/").slice(0, -1).map((d) => rewriteText(d, ns, p.id)) }));
       if (sink.kind === "upload") {
         await sink.uploader.ensureTree([[p.id], ...plan.filter((x) => classify(x.f.file.name) !== "junk").map((x) => [p.id, ...x.dirs])]);
       }
-
       const report: PatientReport = { id: p.id, folder: p.folder, entries: [], dropped: 0 };
       const put = async (dirs: string[], name: string, data: Blob, onSent?: (sent: number) => void) => {
         if (sink.kind === "zip") {
@@ -142,61 +147,61 @@ export async function runAll(patients: RunPatient[], sink: Sink, onProgress: Pro
         }
         return sink.uploader.upload([p.id, ...dirs], name, mimeFor(name), data, onSent);
       };
+      preps.push({ p, names, ns, plan, report, put, used: new Set<string>() });
+    }
 
-      // 3. process + upload each file
-      await mapLimit(plan, concurrency, async ({ f, dirs }) => {
-        const label = f.relPath.split("/").pop()!;
-        const tell = (state: string, extra: { pct?: number; result?: string } = {}) =>
-          onProgress({ patient: p.id, file: classify(label) === "junk" ? "(junk)" : rewriteText(label, ns, p.id), state, done, total, ...extra });
-        tell("processing");
-        let r: FileResult;
+    // 2. one queue over all patients' files, slowest first, so every worker stays busy until the end
+    const tasks = preps.flatMap((pp) => pp.plan.map((x) => ({ pp, ...x })));
+    tasks.sort((a, b) => cost(b.f.file) - cost(a.f.file));
+    await mapLimit(tasks, concurrency, async ({ pp, f, dirs }) => {
+      const { p, names, ns, report, put, used } = pp;
+      const label = f.relPath.split("/").pop()!;
+      const tell = (state: string, extra: { pct?: number; result?: string } = {}) =>
+        onProgress({ patient: p.id, file: classify(label) === "junk" ? "(junk)" : rewriteText(label, ns, p.id), state, done, total, ...extra });
+      tell("processing");
+      let r: FileResult;
+      try {
+        r = (await pool.call({ type: "process", name: f.file.name, file: f.file, names, id: p.id })).result;
+      } catch (e) {
+        r = { status: "blocked", kind: classify(label), outName: rewriteText(label, ns, p.id), actions: [], reason: `error: ${(e as Error).message}` };
+      }
+      let outName = r.outName;
+      for (let n = 2; used.has([...dirs, outName].join("/").toLowerCase()); n++) outName = r.outName.replace(/(\.[^.]*)?$/, ` (${n})$1`);
+      used.add([...dirs, outName].join("/").toLowerCase());
+      const path = [...dirs, outName].join("/");
+      let result: string;
+      if (r.status === "dropped") {
+        report.dropped++;
+        result = "dropped";
+      } else if (r.status === "ok" && r.data) {
+        const blob = r.data instanceof Blob ? r.data : new Blob([r.data as BlobPart]);
+        tell("uploading", { pct: 0 });
         try {
-          r = (await pool.call({ type: "process", name: f.file.name, file: f.file, names, id: p.id })).result;
+          const res = await put(dirs, outName, blob, (sent) => tell("uploading", { pct: Math.round((100 * sent) / Math.max(1, blob.size)) }));
+          report.entries.push({ path, status: res, kind: r.kind, actions: r.actions });
+          result = res;
         } catch (e) {
-          r = { status: "blocked", kind: classify(label), outName: rewriteText(label, ns, p.id), actions: [], reason: `error: ${(e as Error).message}` };
+          report.entries.push({ path, status: "failed", kind: r.kind, actions: r.actions, reason: (e as Error).message });
+          result = "failed";
         }
-        let outName = r.outName;
-        for (let n = 2; used.has([...dirs, outName].join("/").toLowerCase()); n++) outName = r.outName.replace(/(\.[^.]*)?$/, ` (${n})$1`);
-        used.add([...dirs, outName].join("/").toLowerCase());
-        const path = [...dirs, outName].join("/");
-        let result: string;
-        if (r.status === "dropped") {
-          report.dropped++;
-          result = "dropped";
-        } else if (r.status === "ok" && r.data) {
-          const blob = r.data instanceof Blob ? r.data : new Blob([r.data as BlobPart]);
-          tell("uploading", { pct: 0 });
-          try {
-            const res = await put(dirs, outName, blob, (sent) => tell("uploading", { pct: Math.round((100 * sent) / Math.max(1, blob.size)) }));
-            report.entries.push({ path, status: res, kind: r.kind, actions: r.actions });
-            result = res;
-          } catch (e) {
-            report.entries.push({ path, status: "failed", kind: r.kind, actions: r.actions, reason: (e as Error).message });
-            result = "failed";
-          }
-        } else {
-          result = r.status === "blocked" ? "blocked" : "skipped";
-          report.entries.push({ path, status: result as "blocked" | "skipped", kind: r.kind, actions: r.actions, reason: r.reason });
-        }
-        done++;
-        tell("done", { result });
-      });
+      } else {
+        result = r.status === "blocked" ? "blocked" : "skipped";
+        report.entries.push({ path, status: result as "blocked" | "skipped", kind: r.kind, actions: r.actions, reason: r.reason });
+      }
+      done++;
+      tell("done", { result });
+    });
 
-      // 4. manifest (no names: all paths are already rewritten)
+    // 3. manifests (no names: all paths are already rewritten)
+    for (const { p, report, put } of preps) {
       report.entries.sort((a, b) => a.path.localeCompare(b.path));
-      const manifest = {
-        id: p.id,
-        generated: new Date().toISOString(),
-        dropped_junk_files: report.dropped,
-        files: report.entries,
-      };
+      const manifest = { id: p.id, generated: new Date().toISOString(), dropped_junk_files: report.dropped, files: report.entries };
       await put([], "manifest.json", new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" })).catch((e) => {
         report.entries.push({ path: "manifest.json", status: "failed", kind: "manifest", actions: [], reason: (e as Error).message });
       });
-      reports.push(report);
     }
+    return preps.map((pp) => pp.report);
   } finally {
     pool.close();
   }
-  return reports;
 }

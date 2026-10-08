@@ -7,6 +7,8 @@ export interface NameSet {
   parts: Set<string>;
   /** Parts eligible for fuzzy matching (>= 5 letters). */
   fuzzy: string[];
+  /** `fuzzy` in transliteration-folded form (see `translit`). */
+  fuzzyT: string[];
   /** "J A N E" style patterns, one per part. */
   spaced: RegExp[];
 }
@@ -45,6 +47,7 @@ export function buildNameSet(names: string[]): NameSet {
     names: clean,
     parts,
     fuzzy: list.filter((p) => [...p].length >= 5),
+    fuzzyT: list.filter((p) => [...p].length >= 5).map(translit),
     spaced: list.map(
       (p) =>
         new RegExp(
@@ -53,6 +56,23 @@ export function buildNameSet(names: string[]): NameSet {
         ),
     ),
   };
+}
+
+/**
+ * Fold spellings that differ only by romanization (Arabic names especially: Serbaji / Sarbagi / Sarbaji,
+ * Abdel / Abdul, Youssef / Yousef): vowels e->a, o->u, y->i; j/dj->g, q/c->k, ph->f; double letters collapsed.
+ */
+export function translit(s: string): string {
+  return norm(s)
+    .replace(/ph/g, "f")
+    .replace(/dj/g, "g")
+    .replace(/ou/g, "u")
+    .replace(/ee/g, "i")
+    .replace(/[eo]/g, (c) => (c === "e" ? "a" : "u"))
+    .replace(/y/g, "i")
+    .replace(/j/g, "g")
+    .replace(/[qc]/g, "k")
+    .replace(/(.)\1+/g, "$1");
 }
 
 export function levenshtein(a: string, b: string, max = 2): number {
@@ -79,6 +99,10 @@ export function tokenMatches(token: string, ns: NameSet): boolean {
   const t = norm(token);
   if (ns.parts.has(t)) return true;
   if (t.length >= 5 && ns.fuzzy.some((p) => levenshtein(p, t, 1) <= 1)) return true;
+  if (t.length >= 5) {
+    const tt = translit(t);
+    if (ns.fuzzyT.some((p) => levenshtein(p, tt, 1) <= 1)) return true;
+  }
   // glued tokens ("JaneSmithson" from OCR): contains a long name part
   return t.length >= 9 && ns.fuzzy.some((p) => p.length >= 6 && t.includes(p));
 }
@@ -170,7 +194,8 @@ const LABEL_SRC = [
   "dossier", "nip", "ipp", "visite", "n[°º]",
   "file\\s*(?:no|number|#)\\.?", "mrn(?:\\s*&\\s*visit\\s*no\\.?)?", "medical\\s*record(?:\\s*(?:no|number))?\\.?", "(?:visit|chart|record)\\s*(?:no|number)\\.?", "passport(?:\\s*(?:no|number))?\\.?",
 ].join("|");
-const LABEL_RE = new RegExp(`(?<![\\p{L}\\d])(${LABEL_SRC})(?![\\p{L}\\d])[ \\t]*(:|：)?`, "giu");
+// "DOB & Gender:", "Name / Surname:": a second field name between label and colon belongs to the label
+const LABEL_RE = new RegExp(`(?<![\\p{L}\\d])(${LABEL_SRC})(?:[ \\t]*[&/][ \\t]*\\p{L}+)?(?![\\p{L}\\d])[ \\t]*(:|：)?`, "giu");
 const MAX_VALUE = 80;
 
 export interface Label {

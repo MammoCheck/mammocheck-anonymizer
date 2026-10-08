@@ -114,3 +114,24 @@ describe("label modes", () => {
     expect(detect("Name Zed Q", ns, true)).toHaveLength(1); // OCR (loose) mode
   });
 });
+
+describe("compound labels", () => {
+  it("'DOB & Gender:' redacts the value", () => {
+    const ns = buildNameSet(["Jane Smithson"]);
+    const t = "DOB & Gender: 10.02.1987 F";
+    const out = redactString(t, ns);
+    expect(out).not.toContain("1987");
+    expect(out.startsWith("DOB & Gender:")).toBe(true);
+  });
+});
+
+describe("transliteration variants", () => {
+  const ns2 = buildNameSet(["Rana Serbaji", "AbdulAziz Rifai"]);
+  const m = (t: string) => findNameHits(t, ns2).map((h) => t.slice(h.start, h.end));
+  it("catches romanization variants", () => {
+    for (const w of ["Sarbagi", "SARBAGI", "Serbaji", "Sarbaji", "Abdulaziz"]) expect(m(w), w).toEqual([w]);
+  });
+  it("still ignores clinical words", () => {
+    for (const w of ["Endometriosis", "Tripoli", "radiculopathy", "Thermography", "abdominal", "Saturday", "Sarcoidosis", "Serotonin", "Barbiturate"]) expect(m(w), w).toEqual([]);
+  });
+});

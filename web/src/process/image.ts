@@ -1,6 +1,6 @@
 // Image anonymization: OCR -> black boxes -> re-encode (drops EXIF/GPS). No DOM: codec is injected.
 import { findLabels, strictLeaks, type NameSet } from "../names";
-import type { Box, Ocr, OcrLine } from "./ocr";
+import { groupRows, type Box, type Ocr, type OcrLine, type OcrWord } from "./ocr";
 
 export interface Bitmap {
   width: number;
@@ -38,15 +38,31 @@ function downscale(b: Bitmap, factor: number): Bitmap {
   return { width: w, height: h, data };
 }
 
-/** OCR a bitmap; coordinates are returned in the bitmap's own pixel space. */
+const STRIP_H = 800;
+const STRIP_OVERLAP = 120;
+
+function cropRows(b: Bitmap, y0: number, y1: number): Bitmap {
+  return { width: b.width, height: y1 - y0, data: b.data.slice(y0 * b.width * 4, y1 * b.width * 4) };
+}
+
+/**
+ * OCR a bitmap; coordinates are returned in the bitmap's own pixel space. Tall images are read in overlapping
+ * horizontal strips: on a whole photographed page tesseract's layout analysis can drop entire header blocks
+ * (patient name, DOB) that it reads fine once the page is cut into strips.
+ */
 export async function ocrBitmap(b: Bitmap, io: ImageIO, ocr: Ocr): Promise<OcrLine[]> {
   const factor = Math.max(b.width, b.height) / OCR_MAX_DIM;
   const src = factor > 1 ? downscale(b, factor) : b;
   const s = factor > 1 ? factor : 1;
-  const lines = await ocr(await io.encode(src, "png"));
-  if (s === 1) return lines;
-  const sc = (o: Box): Box => ({ x0: o.x0 * s, y0: o.y0 * s, x1: o.x1 * s, y1: o.y1 * s });
-  return lines.map((l) => ({ ...l, ...sc(l), words: l.words.map((w) => ({ ...w, ...sc(w) })) }));
+  const words: OcrWord[] = [];
+  for (let y = 0; ; y += STRIP_H - STRIP_OVERLAP) {
+    const y1 = Math.min(src.height, y + STRIP_H);
+    const part = y === 0 && y1 === src.height ? src : cropRows(src, y, y1);
+    for (const l of await ocr(await io.encode(part, "png")))
+      for (const w of l.words) words.push({ text: w.text, x0: w.x0 * s, x1: w.x1 * s, y0: (w.y0 + y) * s, y1: (w.y1 + y) * s });
+    if (y1 === src.height) break;
+  }
+  return groupRows(words); // also drops the duplicate words read twice in the overlaps
 }
 
 const union = (bs: Box[]): Box => ({
@@ -97,7 +113,15 @@ export function boxesFromOcr(lines: OcrLine[], ns: NameSet, imageWidth: number, 
       const lu = union(lw);
       const lh = Math.min(lu.y1 - lu.y0, 1.6 * h);
       const cy = (lu.y0 + lu.y1) / 2;
-      if (x1 > x0) boxes.push({ x0, y0: cy - lh * 0.95, x1, y1: cy + lh * 0.95 });
+      let y0 = cy - lh * 0.95;
+      let y1 = cy + lh * 0.95;
+      // tilted photos: value words drift above/below the label, so cover their own extent too (unless oversized)
+      for (const w of line.words.slice(start, j)) {
+        if (w.y1 - w.y0 > 2.2 * h) continue;
+        y0 = Math.min(y0, w.y0 - padY);
+        y1 = Math.max(y1, w.y1 + padY);
+      }
+      if (x1 > x0) boxes.push({ x0, y0, x1, y1 });
     });
   }
   return boxes;

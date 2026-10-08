@@ -82,7 +82,13 @@ export async function processFile(name: string, blob: Blob, ctx: Ctx): Promise<F
           const r = await anonymizePdf(bytes, ctx);
           bytes = r.bytes;
           notes.push(...r.notes);
-          g = await leakCheckPdf(bytes, ctx);
+          // image pages were already re-OCR'd page by page inside anonymizePdf; the gate checks text, metadata, raw bytes
+          g = await leakCheckPdf(bytes, ctx, { skipOcr: true });
+          if (r.ocrLeaks) {
+            g.leaks += r.ocrLeaks;
+            (g.where ??= []).push(`${r.ocrLeaks} OCR line(s)`);
+            break; // another full pass would OCR the same pages the same way
+          }
         }
         if (g.leaks || g.metadata) return res({ status: "blocked", reason: `leak gate: ${g.leaks} hit(s) [${(g.where ?? []).slice(0, 6).join(", ")}]${g.metadata ? ", metadata" : ""}` });
         return res({ status: "ok", data: bytes, actions: [...notes, "metadata removed"] });

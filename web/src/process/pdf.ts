@@ -158,13 +158,14 @@ function cleanWidgets(doc: mupdf.PDFDocument, ns: NameSet, notes: string[]) {
   }
 }
 
-export async function anonymizePdf(bytes: Uint8Array, ctx: PdfCtx): Promise<{ bytes: Uint8Array; notes: string[] }> {
+export async function anonymizePdf(bytes: Uint8Array, ctx: PdfCtx): Promise<{ bytes: Uint8Array; notes: string[]; ocrLeaks: number }> {
   const { ns } = ctx;
   const doc = openPdf(bytes);
   const notes: string[] = [];
   cleanWidgets(doc, ns, notes);
   let ocrPages = 0;
   let redactions = 0;
+  let unverified = 0; // OCR lines still leaking after the last round
   for (let i = 0; i < doc.countPages(); i++) {
     const page = doc.loadPage(i);
     // drop annotations carrying names, clear annotation authors, drop mailto/name links
@@ -178,25 +179,39 @@ export async function anonymizePdf(bytes: Uint8Array, ctx: PdfCtx): Promise<{ by
 
     const content = pageContent(page);
     const rects: R[] = textRects(content.lines, ns).map(shrink);
-    if (needsOcr(page, content)) {
-      if (!ctx.io || !ctx.ocr) throw new Error("OCR required but not available");
+    if (!needsOcr(page, content)) {
+      for (const r of rects) page.createAnnotation("Redact").setRect(r);
+      if (rects.length) page.applyRedactions(true);
+      redactions += rects.length;
+      continue;
+    }
+    // image page: OCR -> redact -> re-render and OCR again, until a round finds nothing. That last empty
+    // round is this page's leak check, so the gate does not have to OCR it again.
+    if (!ctx.io || !ctx.ocr) throw new Error("OCR required but not available");
+    ocrPages++;
+    let pending = 1;
+    for (let round = 0; round < 3; round++) {
       const { bmp, scale, origin } = renderBitmap(page);
       const lines = withoutBlackWords(await ocrBitmap(bmp, ctx.io, await ctx.ocr()), bmp);
-      for (const b of boxesFromOcr(lines, ns, bmp.width))
-        rects.push([origin[0] + b.x0 / scale, origin[1] + b.y0 / scale, origin[0] + b.x1 / scale, origin[1] + b.y1 / scale]);
-      ocrPages++;
+      const found = boxesFromOcr(lines, ns, bmp.width, round === 0); // label rows only once; later rounds are the check
+      for (const b of found) rects.push([origin[0] + b.x0 / scale, origin[1] + b.y0 / scale, origin[0] + b.x1 / scale, origin[1] + b.y1 / scale]);
+      if (rects.length === 0) {
+        pending = 0;
+        break;
+      }
+      for (const r of rects) page.createAnnotation("Redact").setRect(r);
+      page.applyRedactions(true);
+      redactions += rects.length;
+      rects.length = 0;
+      pending = lines.filter((l) => strictLeaks(l.text, ns).length > 0).length;
     }
-    for (const r of rects) {
-      page.createAnnotation("Redact").setRect(r);
-    }
-    if (rects.length) page.applyRedactions(true);
-    redactions += rects.length;
+    unverified += pending;
   }
   wipeMetadata(doc);
   const out = doc.saveToBuffer("garbage=compact,compress").asUint8Array();
   notes.push(`${redactions} redaction(s)`);
   if (ocrPages) notes.push(`${ocrPages} page(s) via OCR`);
-  return { bytes: out.slice(), notes };
+  return { bytes: out.slice(), notes, ocrLeaks: unverified };
 }
 
 /** Plain text lines of a PDF text layer (harvesting / leak gate). */
@@ -208,7 +223,7 @@ export function pdfTextLines(bytes: Uint8Array): string[] {
 }
 
 /** Leak gate: number of leaking lines (text layer + OCR of image pages) and leftover metadata. */
-export async function leakCheckPdf(bytes: Uint8Array, ctx: PdfCtx): Promise<{ leaks: number; metadata: boolean; where: string[] }> {
+export async function leakCheckPdf(bytes: Uint8Array, ctx: PdfCtx, opts: { skipOcr?: boolean } = {}): Promise<{ leaks: number; metadata: boolean; where: string[] }> {
   // raw bytes: catches names in uncompressed structure (bookmarks, field names, ...)
   const rawHit = await scanBlobForNeedles(new Blob([bytes as BlobPart]), byteNeedles(ctx.ns));
   const { ns } = ctx;
@@ -219,7 +234,7 @@ export async function leakCheckPdf(bytes: Uint8Array, ctx: PdfCtx): Promise<{ le
     const page = doc.loadPage(i);
     const content = pageContent(page);
     for (const l of content.lines) for (const h of leaks(l.text, ns)) { count++; where.push(`p${i + 1} text ${h.kind}`); }
-    if (needsOcr(page, content) && ctx.io && ctx.ocr) {
+    if (!opts.skipOcr && needsOcr(page, content) && ctx.io && ctx.ocr) {
       const { bmp } = renderBitmap(page);
       const lines = withoutBlackWords(await ocrBitmap(bmp, ctx.io, await ctx.ocr()), bmp);
       for (const l of lines) for (const h of strictLeaks(l.text, ns)) { count++; where.push(`p${i + 1} ocr ${h.kind}`); }

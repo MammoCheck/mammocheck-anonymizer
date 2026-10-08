@@ -12,6 +12,8 @@ const workerUrl = import.meta.env.VITE_WORKER_URL ?? "";
 
 let patients: RunPatient[] = [];
 let lastZip: Blob | null = null;
+/** Every patient sent in this browser session: the key file always lists all of them. */
+const sessionKey: { name: string; id: string; folder: string }[] = [];
 
 // ---- mode banner ----
 const banner = $("mode");
@@ -106,16 +108,20 @@ function download(blob: Blob, name: string) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
-const keyCsv = () => new Blob([toCsv(patients.map((p) => ({ name: p.name, id: p.id, folder: p.folder })))], { type: "text/csv" });
-const stamp = () => new Date().toISOString().slice(0, 10);
+const keyCsv = () => new Blob([toCsv(sessionKey)], { type: "text/csv" });
+const stamp = () => new Date().toISOString().slice(0, 16).replace("T", "_").replace(":", "-");
 
 $("go").addEventListener("click", async () => {
   $("step-pick").hidden = true;
   $("step-patients").hidden = true;
   $("step-progress").hidden = false;
+  for (const p of patients) sessionKey.push({ name: p.name, id: p.id, folder: p.folder });
   download(keyCsv(), `mammocheck-key-${stamp()}.csv`); // save the key before anything else happens
   const bar = $<HTMLProgressElement>("bar");
   const log = $("log");
+  log.replaceChildren();
+  $("active").replaceChildren();
+  bar.value = 0;
   const active = new Map<string, HTMLElement>();
   const zip = new JSZip();
   let reports: PatientReport[];
@@ -162,6 +168,14 @@ $("go").addEventListener("click", async () => {
   showReport(reports);
 });
 
+const STATUS_TEXT: Record<string, string> = {
+  uploaded: zipMode ? "✓ zipped" : "✓ uploaded",
+  exists: "✓ already on Drive",
+  blocked: "⚠ blocked",
+  skipped: "– skipped",
+  failed: "✗ failed",
+};
+
 function showReport(reports: PatientReport[]) {
   $("step-progress").hidden = true;
   $("step-report").hidden = false;
@@ -170,11 +184,11 @@ function showReport(reports: PatientReport[]) {
   dz.hidden = !zipMode;
   dz.onclick = () => lastZip && download(lastZip, `mammocheck-anonymized-${stamp()}.zip`);
   const root = $("report");
-  root.replaceChildren();
+  const batch = document.createElement("div");
   for (const r of reports) {
-    const count = (s: string) => r.entries.filter((e) => e.status === s).length;
-    const sent = count("uploaded") + count("exists");
-    const bad = r.entries.filter((e) => !["uploaded", "exists"].includes(e.status));
+    const ok = (e: { status: string }) => e.status === "uploaded" || e.status === "exists";
+    const sent = r.entries.filter(ok).length;
+    const bad = r.entries.filter((e) => !ok(e));
     const d = document.createElement("details");
     d.open = bad.length > 0;
     const sum = document.createElement("summary");
@@ -185,13 +199,29 @@ function showReport(reports: PatientReport[]) {
     d.append(sum);
     const ul = document.createElement("ul");
     ul.className = "rep";
-    for (const e of bad) {
+    // problems first, then everything that went through; junk files (Thumbs.db etc.) are only counted
+    for (const e of [...bad, ...r.entries.filter(ok)]) {
       const li = document.createElement("li");
-      li.className = e.status === "skipped" ? "warn" : "bad";
-      li.textContent = `${e.status.toUpperCase()}: ${e.path}${e.reason ? " (" + e.reason + ")" : ""}`;
+      if (!ok(e)) li.className = e.status === "skipped" ? "warn" : "bad";
+      li.textContent = `${STATUS_TEXT[e.status] ?? e.status}  ${e.path}${e.reason ? " (" + e.reason + ")" : ""}`;
+      ul.append(li);
+    }
+    if (r.dropped) {
+      const li = document.createElement("li");
+      li.textContent = `${r.dropped} system file(s) ignored (Thumbs.db, .DS_Store, …)`;
       ul.append(li);
     }
     d.append(ul);
-    root.append(d);
+    batch.append(d);
   }
+  root.prepend(batch); // newest run on top, earlier runs stay listed
 }
+
+// ---- next batch ----
+$("more").addEventListener("click", () => {
+  patients = [];
+  $<HTMLInputElement>("pick").value = "";
+  $("step-patients").hidden = true;
+  $("step-pick").hidden = false;
+  $("step-pick").scrollIntoView({ behavior: "smooth" });
+});

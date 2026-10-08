@@ -12,15 +12,18 @@
     <main>
       <h1>MammoCheck Anonymizer</h1>
       <p class="lead">
-        Select the folder that contains your patients' folders. Everything is anonymized <strong>on this computer</strong>;
-        only the anonymized copies are uploaded. Original files never leave your PC.
+        Add patient folders: one patient folder, several at once, or the folder that contains all of them.
+        Everything is anonymized <strong>on this computer</strong>; only the anonymized copies are uploaded.
+        Original files never leave your PC.
       </p>
       <p id="mode" class="banner" hidden></p>
 
       <section id="step-pick">
         <div id="drop" class="drop" tabindex="0">
-          <p><strong>Drop a folder here</strong> or</p>
-          <label class="btn"><input id="pick" type="file" webkitdirectory multiple hidden />Choose folder</label>
+          <p><strong>Drop one or more patient folders here</strong><br />
+            (or the folder that contains all your patient folders)</p>
+          <p>or <label class="btn"><input id="pick" type="file" webkitdirectory multiple hidden />Choose folder</label></p>
+          <p class="hint">"Choose folder" picks a single folder: to add several patients, drag them here together or choose the folder that contains them.</p>
         </div>
       </section>
 
@@ -47,7 +50,7 @@
       <section id="step-report" hidden>
         <h2>Report</h2>
         <p><strong>Keep the key file safe</strong>: it is the only link between patient names and IDs and is never uploaded.</p>
-        <p><button id="dlkey" class="btn">Download key file</button> <button id="dlzip" class="btn" hidden>Download ZIP</button></p>
+        <p><button id="more" class="btn primary">Upload more patients</button> <button id="dlkey" class="btn">Download key file</button> <button id="dlzip" class="btn" hidden>Download ZIP</button></p>
         <div id="report"></div>
       </section>
     </main>
