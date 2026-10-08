@@ -41,15 +41,32 @@ class Pool {
   private workers: Worker[] = [];
   private idle: Worker[] = [];
   private waiters: ((w: Worker) => void)[] = [];
-  private pending = new Map<number, (d: any) => void>();
+  private pending = new Map<number, { resolve: (d: any) => void; reject: (e: Error) => void }>();
   private seq = 0;
+  private failure: Error | undefined;
   constructor(size: number) {
     for (let i = 0; i < size; i++) {
       const w = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
-      w.onmessage = (e) => this.pending.get(e.data.reqId)?.(e.data);
+      w.onmessage = (e) => {
+        if (e.data?.ready) return this.release(w); // worker finished loading: now it can take jobs
+        const p = this.pending.get(e.data.reqId);
+        if (!p) return;
+        if (e.data.error) p.reject(new Error(e.data.error));
+        else p.resolve(e.data);
+      };
+      w.onerror = (e) => {
+        // a load failure (e.g. wasm blocked) would otherwise leave the run waiting forever
+        this.failure = new Error(`processing worker failed: ${e.message || "could not load"}`);
+        for (const p of this.pending.values()) p.reject(this.failure);
+        for (const next of this.waiters.splice(0)) next(w);
+      };
       this.workers.push(w);
-      this.idle.push(w);
     }
+  }
+  private release(w: Worker) {
+    const next = this.waiters.shift();
+    if (next) next(w);
+    else this.idle.push(w);
   }
   private take(): Promise<Worker> {
     const w = this.idle.pop();
@@ -57,18 +74,16 @@ class Pool {
   }
   async call(msg: Dist<WorkerReq>): Promise<any> {
     const w = await this.take();
+    if (this.failure) throw this.failure;
     const reqId = ++this.seq;
     try {
       return await new Promise((resolve, reject) => {
-        this.pending.set(reqId, resolve);
-        w.onerror = (e) => reject(new Error(e.message));
+        this.pending.set(reqId, { resolve, reject });
         w.postMessage({ ...msg, reqId });
       });
     } finally {
       this.pending.delete(reqId);
-      const next = this.waiters.shift();
-      if (next) next(w);
-      else this.idle.push(w);
+      this.release(w);
     }
   }
   close() {
