@@ -116,6 +116,7 @@ $("go").addEventListener("click", async () => {
   download(keyCsv(), `mammocheck-key-${stamp()}.csv`); // save the key before anything else happens
   const bar = $<HTMLProgressElement>("bar");
   const log = $("log");
+  const active = new Map<string, HTMLElement>();
   const zip = new JSZip();
   let reports: PatientReport[];
   try {
@@ -125,12 +126,32 @@ $("go").addEventListener("click", async () => {
       (e) => {
         bar.max = Math.max(1, e.total);
         bar.value = e.done;
-        $("status").textContent = `${e.done} / ${e.total} files`;
-        if (e.state === "done") {
-          const li = document.createElement("li");
-          li.textContent = `${e.patient}  ${e.file}`;
-          log.prepend(li);
+        if (e.state === "harvesting") {
+          $("status").textContent = `${e.done} / ${e.total} files — ${e.patient}: reading documents for name spellings…`;
+          return;
         }
+        $("status").textContent = `${e.done} / ${e.total} files — ${e.patient}`;
+        const key = `${e.patient}/${e.file}`;
+        let row = active.get(key);
+        if (e.state === "done") {
+          row?.remove();
+          active.delete(key);
+          if (e.result === "dropped") return; // junk (Thumbs.db etc.): not worth listing
+          const li = document.createElement("li");
+          const mark: Record<string, string> = { uploaded: "✓ uploaded", exists: "✓ already on Drive", blocked: "⚠ blocked", skipped: "– skipped", failed: "✗ failed" };
+          li.textContent = `${mark[e.result ?? ""] ?? e.result}  ${e.patient}  ${e.file}`;
+          if (e.result === "blocked" || e.result === "failed") li.className = "bad";
+          else if (e.result === "skipped") li.className = "warn";
+          log.prepend(li);
+          return;
+        }
+        if (!row) {
+          row = document.createElement("li");
+          $("active").append(row);
+          active.set(key, row);
+        }
+        const what = e.state === "uploading" ? `${zipMode ? "adding to ZIP" : "uploading"} ${e.pct ?? 0}%` : "anonymizing…";
+        row.textContent = `${e.patient}  ${e.file}  — ${what}`;
       },
     );
   } catch (e) {

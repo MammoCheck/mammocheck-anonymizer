@@ -77,7 +77,7 @@ class Pool {
 }
 
 export interface Progress {
-  (e: { patient: string; file: string; state: string; done: number; total: number }): void;
+  (e: { patient: string; file: string; state: string; done: number; total: number; pct?: number; result?: string }): void;
 }
 
 export const splitExtra = (s: string) => s.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
@@ -101,6 +101,7 @@ export async function runAll(patients: RunPatient[], sink: Sink, onProgress: Pro
       const baseNames = [p.name, ...splitExtra(p.extra)];
       // 1. harvest extra name spellings from Name: fields
       const textFiles = p.files.filter((f) => ["docx", "pdf", "text"].includes(classify(f.file.name)));
+      onProgress({ patient: p.id, file: "", state: "harvesting", done, total });
       const harvested = new Set<string>();
       await mapLimit(textFiles, concurrency, async (f) => {
         for (const n of (await pool.call({ type: "harvest", name: f.file.name, file: f.file, names: baseNames })).names as string[]) harvested.add(n);
@@ -119,18 +120,19 @@ export async function runAll(patients: RunPatient[], sink: Sink, onProgress: Pro
       }
 
       const report: PatientReport = { id: p.id, folder: p.folder, entries: [], dropped: 0 };
-      const put = async (dirs: string[], name: string, data: Blob) => {
+      const put = async (dirs: string[], name: string, data: Blob, onSent?: (sent: number) => void) => {
         if (sink.kind === "zip") {
           sink.zip.file([p.id, ...dirs, name].join("/"), data);
           return "uploaded" as const;
         }
-        return sink.uploader.upload([p.id, ...dirs], name, mimeFor(name), data);
+        return sink.uploader.upload([p.id, ...dirs], name, mimeFor(name), data, onSent);
       };
 
       // 3. process + upload each file
       await mapLimit(plan, concurrency, async ({ f, dirs }) => {
         const label = f.relPath.split("/").pop()!;
-        const tell = (state: string) => onProgress({ patient: p.id, file: classify(label) === "junk" ? "(junk)" : rewriteText(label, ns, p.id), state, done, total });
+        const tell = (state: string, extra: { pct?: number; result?: string } = {}) =>
+          onProgress({ patient: p.id, file: classify(label) === "junk" ? "(junk)" : rewriteText(label, ns, p.id), state, done, total, ...extra });
         tell("processing");
         let r: FileResult;
         try {
@@ -142,20 +144,27 @@ export async function runAll(patients: RunPatient[], sink: Sink, onProgress: Pro
         for (let n = 2; used.has([...dirs, outName].join("/").toLowerCase()); n++) outName = r.outName.replace(/(\.[^.]*)?$/, ` (${n})$1`);
         used.add([...dirs, outName].join("/").toLowerCase());
         const path = [...dirs, outName].join("/");
-        if (r.status === "dropped") report.dropped++;
-        else if (r.status === "ok" && r.data) {
-          tell("uploading");
+        let result: string;
+        if (r.status === "dropped") {
+          report.dropped++;
+          result = "dropped";
+        } else if (r.status === "ok" && r.data) {
+          const blob = r.data instanceof Blob ? r.data : new Blob([r.data as BlobPart]);
+          tell("uploading", { pct: 0 });
           try {
-            const res = await put(dirs, outName, r.data instanceof Blob ? r.data : new Blob([r.data as BlobPart]));
+            const res = await put(dirs, outName, blob, (sent) => tell("uploading", { pct: Math.round((100 * sent) / Math.max(1, blob.size)) }));
             report.entries.push({ path, status: res, kind: r.kind, actions: r.actions });
+            result = res;
           } catch (e) {
             report.entries.push({ path, status: "failed", kind: r.kind, actions: r.actions, reason: (e as Error).message });
+            result = "failed";
           }
         } else {
-          report.entries.push({ path, status: r.status === "blocked" ? "blocked" : "skipped", kind: r.kind, actions: r.actions, reason: r.reason });
+          result = r.status === "blocked" ? "blocked" : "skipped";
+          report.entries.push({ path, status: result as "blocked" | "skipped", kind: r.kind, actions: r.actions, reason: r.reason });
         }
         done++;
-        tell("done");
+        tell("done", { result });
       });
 
       // 4. manifest (no names: all paths are already rewritten)
