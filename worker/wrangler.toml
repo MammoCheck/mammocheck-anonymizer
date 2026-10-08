@@ -1,0 +1,9 @@
+name = "mammocheck-anonymizer"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Secrets (set with `wrangler secret put <NAME>`, never commit values):
+#   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN,
+#   DRIVE_FOLDER_ID, UPLOAD_KEY, ALLOWED_ORIGIN
+# ALLOWED_ORIGIN = origin of the GitHub Pages site, e.g. https://mammocheck.github.io
+# (for local testing you may list several origins separated by commas)

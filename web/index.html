@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
+    <title>MammoCheck Anonymizer</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>MammoCheck Anonymizer</h1>
+      <p class="lead">
+        Select the folder that contains your patients' folders. Everything is anonymized <strong>on this computer</strong>;
+        only the anonymized copies are uploaded. Original files never leave your PC.
+      </p>
+      <p id="mode" class="banner" hidden></p>
+
+      <section id="step-pick">
+        <div id="drop" class="drop" tabindex="0">
+          <p><strong>Drop a folder here</strong> or</p>
+          <label class="btn"><input id="pick" type="file" webkitdirectory multiple hidden />Choose folder</label>
+        </div>
+      </section>
+
+      <section id="step-patients" hidden>
+        <h2>Patients found</h2>
+        <p class="hint">Each folder name is treated as the patient's name. Add other spellings or nicknames under "Extra names" if needed (optional).</p>
+        <table>
+          <thead><tr><th>Name</th><th>Extra names</th><th>ID</th><th>Files</th></tr></thead>
+          <tbody id="patients"></tbody>
+        </table>
+        <p class="hint">Returning patients: load your previous key file so they keep the same ID.
+          <label class="btn small"><input id="keyfile" type="file" accept=".csv" hidden />Load key file</label></p>
+        <button id="go" class="btn primary">Anonymize &amp; upload</button>
+      </section>
+
+      <section id="step-progress" hidden>
+        <h2>Working&hellip;</h2>
+        <progress id="bar" value="0" max="1"></progress>
+        <p id="status" class="hint"></p>
+        <ul id="log" class="log"></ul>
+      </section>
+
+      <section id="step-report" hidden>
+        <h2>Report</h2>
+        <p><strong>Keep the key file safe</strong>: it is the only link between patient names and IDs and is never uploaded.</p>
+        <p><button id="dlkey" class="btn">Download key file</button> <button id="dlzip" class="btn" hidden>Download ZIP</button></p>
+        <div id="report"></div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
