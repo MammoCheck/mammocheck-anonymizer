@@ -33,7 +33,7 @@ with the folder name are added automatically. Label-anchored redaction removes t
 A **leak gate** re-checks every output (text layer, OCR of the output image, raw bytes); a failing file is **not uploaded** and is listed in the report.
 File names have name variants replaced by the patient ID (`Med. F-Thermo R.Smithson.pdf` -> `Med. F-Thermo MC-7F3K2Q.pdf`).
 Each patient gets a random ID `MC-XXXXXX` and a `manifest.json` (files, actions, skipped/blocked; no names). The doctor downloads
-`mammocheck-key-<date>.csv` (name <-> ID); it is never uploaded. Loading an old key file keeps IDs stable for returning patients.
+`mammocheck-key-<date>.csv` (name <-> ID); it is never uploaded. Every run assigns new IDs (a returning patient gets a new ID).
 
 ## Setup
 

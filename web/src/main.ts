@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { assignIds, parseCsv, toCsv, type KeyRow } from "./key";
+import { assignIds, toCsv } from "./key";
 import { detectPatients, classify } from "./scan";
 import { runAll, type PatientReport, type RunPatient } from "./run";
 import { Uploader } from "./upload";
@@ -11,7 +11,6 @@ const uploadKey = new URLSearchParams(location.hash.slice(1)).get("k") ?? "";
 const workerUrl = import.meta.env.VITE_WORKER_URL ?? "";
 
 let patients: RunPatient[] = [];
-let loadedKey: KeyRow[] = [];
 let lastZip: Blob | null = null;
 
 // ---- mode banner ----
@@ -48,7 +47,7 @@ async function walk(entry: FileSystemEntry, prefix: string, out: { path: string;
 
 function setFiles(list: { path: string; file: File }[]) {
   const found = detectPatients(list);
-  const ids = assignIds(found.map((p) => p.name), loadedKey);
+  const ids = assignIds(found.map((p) => p.name), []);
   patients = found.map((p) => ({
     folder: p.name,
     name: p.name,
@@ -75,15 +74,6 @@ drop.addEventListener("drop", async (e) => {
   for (const it of items) await walk(it, "", out);
   // a single dropped folder behaves like selecting it; several dropped folders are wrapped in a virtual root
   setFiles(items.length === 1 ? out : out.map((o) => ({ ...o, path: "Selected/" + o.path })));
-});
-
-$<HTMLInputElement>("keyfile").addEventListener("change", async (e) => {
-  const f = (e.target as HTMLInputElement).files?.[0];
-  if (!f) return;
-  loadedKey = parseCsv(await f.text());
-  const ids = assignIds(patients.map((p) => p.folder), loadedKey);
-  patients.forEach((p) => (p.id = ids.get(p.folder)!));
-  renderPatients();
 });
 
 function renderPatients() {

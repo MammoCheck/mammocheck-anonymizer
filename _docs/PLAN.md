@@ -59,7 +59,7 @@ README.md                setup: Google OAuth refresh token, wrangler secrets, li
 
 ## IDs + key
 - ID `MC-` + 6 random base32 chars (crypto.getRandomValues).
-- Doctor downloads `mammocheck-key-<date>.csv` (name, ID, original folder) — never uploaded. Loading old key reuses IDs for returning patients.
+- Doctor downloads `mammocheck-key-<date>.csv` (name, ID, original folder) — never uploaded. No key loading: every run assigns new IDs.
 - Upload per patient: `DRIVE_ROOT/MC-7F3K2Q/...` + `manifest.json` (file list, actions taken, skipped files, no names).
 
 ## Worker (env)
