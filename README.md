@@ -32,8 +32,10 @@ with the folder name are added automatically. Label-anchored redaction removes t
 `Phone`, `Mobile`, `Email`, `ID`, `File No`, `MRN`... Clinical text, age, gender and exam dates are kept.
 A **leak gate** re-checks every output (text layer, OCR of the output image, raw bytes); a failing file is **not uploaded** and is listed in the report.
 File names have name variants replaced by the patient ID (`Med. F-Thermo R.Smithson.pdf` -> `Med. F-Thermo MC-7F3K2Q.pdf`).
-Each patient gets a random ID `MC-XXXXXX` and a `manifest.json` (files, actions, skipped/blocked; no names). The doctor downloads
-`mammocheck-key-<date>.csv` (name <-> ID); it is never uploaded. Every run assigns new IDs (a returning patient gets a new ID).
+Each patient gets a random ID `MC-XXXXXX` and a `manifest.json` (files, actions, skipped/blocked; no names). The page keeps an **"Already uploaded" list** (name, ID, date, file counts)
+in the browser's localStorage on the doctor's PC only; it is never uploaded. When a folder is added again, that patient is unticked and
+keeps its ID, so a re-send goes to the same Drive folder and skips files already there. "Export list" / "Import list" (CSV) back it up
+or move it to another browser.
 
 ## Setup
 
